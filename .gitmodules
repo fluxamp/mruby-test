@@ -1,0 +1,11 @@
+[submodule "libs/mruby"]
+	path = libs/mruby
+	url = https://github.com/mruby/mruby
+	ignore = dirty
+[submodule "libs/freertos"]
+	path = libs/freertos
+	url = https://github.com/aws/amazon-freertos
+[submodule "libs/libopencm3"]
+	path = libs/libopencm3
+	url = https://github.com/libopencm3/libopencm3/
+	ignore = dirty

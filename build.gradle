@@ -1,0 +1,209 @@
+
+apply plugin: "c"
+apply plugin: "cpp"
+
+def compiler_args = [
+	"-Wall",
+	"-Werror",
+	"-mthumb",
+	"-ffunction-sections",
+	"-march=armv7e-m",
+	"-mfloat-abi=hard",
+	"-mfpu=fpv4-sp-d16",
+	"-ffast-math",
+	"-O2",
+    "-DReset_Handler=reset_handler",
+]
+
+def linker_args = [
+	"-mthumb",
+	"-Wl,--cref",
+	"-Wl,--check-sections",
+	"-Wl,--gc-sections",
+	"-Wl,--entry=reset_handler",
+	"-Wl,--defsym=STACK_SIZE=0x200",
+	"-Wl,--unresolved-symbols=report-all",
+	"-Wl,--warn-common",
+	"-Wl,--warn-section-align",
+	"-Wl,--warn-unresolved-symbols",
+	"-march=armv7e-m",
+	"-Wl,--start-group",
+	"-lgcc",
+    "-lc",
+	"-lm",
+    "-lstdc++",
+	"-Wl,--end-group",
+	"-nostartfiles",
+	"-Werror",
+	// "--specs=nosys.specs",
+    // "--specs=nano.specs",
+]
+
+model {
+	toolChains {
+		gcc(Gcc) {
+			target("arm") {
+				cCompiler.executable = "arm-none-eabi-gcc"
+				cppCompiler.executable = "arm-none-eabi-g++"
+				linker.executable = "arm-none-eabi-g++"
+			}
+		}
+	}
+
+	platforms {
+		arm {
+			architecture "arm"
+		}
+	}
+
+	buildTypes {
+		debug
+//		release
+	}
+
+	repositories {
+		libs(PrebuiltLibraries) {
+			opencm3_f4 {
+				headers.srcDir "libs/libopencm3/include"
+				binaries.withType(StaticLibraryBinary) {
+                    staticLibraryFile = file("libs/libopencm3/lib/libopencm3_stm32f4.a")
+				}
+			}
+		
+            mruby {
+                headers.srcDir 'libs/mruby/include'
+                binaries.withType(StaticLibraryBinary) {
+                    staticLibraryFile = file('libs/mruby/build/arm/lib/libmruby.a')
+                }
+            }
+        }
+	}
+
+	components {
+		freertos(NativeLibrarySpec) {
+			targetPlatform "arm"
+
+			sources.c {
+				source {
+					srcDirs "libs/freertos/lib/FreeRTOS", "libs/freertos/lib/FreeRTOS/portable/GCC/ARM_CM4F", "libs/freertos/lib/FreeRTOS/portable/MemMang"
+					include "port.c", "event_groups.c", "list.c", "queue.c", "stream_buffer.c", "tasks.c", "timers.c", "heap_4.c"
+				}
+				exportedHeaders.srcDirs "libs/freertos/lib/include", "libs/freertos/lib/include/private", 
+										"libs/freertos/lib/FreeRTOS/portable/GCC/ARM_CM4F", "libs/config"
+			}
+
+			binaries.all {
+				if (buildType == buildTypes.debug) {
+					cCompiler.args "-g"
+				}
+			}
+		}
+
+		firmware(NativeExecutableSpec) {
+			targetPlatform "arm"
+
+            sources {
+				c {
+					source {
+						srcDir "src"
+						include "*.c"
+					}
+
+					c.lib library: "opencm3_f4", linkage: "static"
+					c.lib library: "freertos", linkage: "static"
+
+                    exportedHeaders.srcDir "include"
+				}
+			}
+
+			sources {
+				cpp {
+					source {
+						srcDir "src"
+						include "*.cpp"
+					}
+
+					cpp.lib library: "opencm3_f4", linkage: "static"
+                    cpp.lib library: 'mruby', linkage: 'static'
+					cpp.lib library: "freertos", linkage: "static"
+
+                    exportedHeaders.srcDir "include"
+				}
+			}
+
+			binaries.all {
+				if (buildType == buildTypes.debug) {
+					cppCompiler.args "-g"
+                    cppCompiler.args "-ggdb3"
+				}
+				cCompiler.define "STM32F412ZG"
+				cCompiler.define "STM32F4"
+				cppCompiler.define "STM32F412ZG"
+				cppCompiler.define "STM32F4"
+				linker.args "-L" + file('./')
+				linker.args "-T" + file('generated.stm32f412zg.ld')
+			}
+		}
+	}
+
+	binaries {
+		all {
+			for(c in compiler_args) {
+				cCompiler.args c
+				cppCompiler.args c
+				linker.args c
+			}
+
+			for(l in linker_args) {
+				linker.args l
+			}
+		}
+	}
+}
+
+task flash(dependsOn: build) {
+    doLast {
+        exec {
+            workingDir "build/exe/firmware/"
+            commandLine "arm-none-eabi-objcopy", "-O", "binary", "firmware", "firmware.bin"
+        }
+        exec {
+            workingDir "."
+            commandLine "st-flash", "write", "build/exe/firmware/firmware.bin", "0x8000000"
+        }
+    }
+}
+
+task checkForLibraries {
+	// check if git was initialized properly and build libopencm3 if necessary
+	if(!file('libs/libopencm3/lib/libopencm3_stm32f4.a').exists()) {
+		exec {		
+			workingDir '.'
+			commandLine 'git', 'submodule', 'init'
+		}
+
+		exec {
+			workingDir '.'
+			commandLine 'git', 'submodule', 'update'
+		}
+
+		// build libopencm3
+		exec {
+			workingDir 'libs/libopencm3'
+			commandLine 'make'
+		}
+
+		// build mruby
+        copy {
+            from 'libs/config/'
+            into 'libs/mruby/'
+            include 'build_config.rb'
+        }
+        exec {
+            workingDir 'libs/mruby'
+            commandLine './minirake'
+        }
+	}
+}
+
+build.dependsOn checkForLibraries
